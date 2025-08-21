@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-// models/hoot.js
+
 const commentSchema = new mongoose.Schema(
   {
     text: {
@@ -12,7 +12,7 @@ const commentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const hootSchema = new mongoose.Schema(
+const soundByteSchema = new mongoose.Schema(
   {
     title: {
       type: String,
@@ -34,6 +34,6 @@ const hootSchema = new mongoose.Schema(
 );
 
 
-const Hoot = mongoose.model('Hoot', hootSchema);
+const SoundByte = mongoose.model('SoundByte', soundByteSchema);
 
-module.exports = Hoot;
+module.exports = SoundByte;
