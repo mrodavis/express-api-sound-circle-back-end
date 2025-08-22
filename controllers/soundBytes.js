@@ -8,7 +8,7 @@ router.post("/", verifyToken, async (req, res) => {
     req.body.author = req.user._id;
     const sByte = await SoundByte.create(req.body);
     sByte._doc.author = req.user;
-    res.status(201).json(hoot);
+    res.status(201).json(sByte);
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
@@ -27,8 +27,8 @@ router.get("/", verifyToken, async (req, res) => {
 
 router.get("/:sByteId", verifyToken, async (req, res) => {
   try {
-    const sByte = await SoundByte.findById(req.params.hootId).populate("author");
-    res.status(200).json(hoot);
+    const sByte = await SoundByte.findById(req.params.sByteId).populate("author");
+    res.status(200).json(sByte);
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
