@@ -9,6 +9,7 @@ const testJwtRouter = require('./controllers/test-jwt');
 const authRouter = require('./controllers/auth');
 const usersRouter = require('./controllers/users.js');
 const soundBytesRouter = require("./controllers/soundBytes.js");
+const Tracks = require('./controllers/tracks.controller');
 
 mongoose.connect(process.env.MONGODB_URI);
 
@@ -26,6 +27,20 @@ app.use('/test-jwt', testJwtRouter);
 app.use('/users', usersRouter);
 app.use("/sBytes", soundBytesRouter);
 // Routes go here
+app.post   ('/tracks',       Tracks.create);
+app.get    ('/tracks',       Tracks.index);
+app.get    ('/tracks/:id',   Tracks.show);
+app.put    ('/tracks/:id',   Tracks.update);
+app.delete ('/tracks/:id',   Tracks.destroy);
+
+// basic 404
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+
+// basic error handler
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(err.status || 500).json({ error: err.message || 'Server error' });
+});
 
 app.listen(PORT, () => {
   console.log('The express app is ready!');

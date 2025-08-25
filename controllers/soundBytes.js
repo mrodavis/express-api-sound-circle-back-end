@@ -1,135 +1,220 @@
-const express = require("express");
-const verifyToken = require("../middleware/verify-token.js");
-const SoundByte = require("../models/soundByte.js");
+// controllers/soundBytes.js
+const express = require('express');
 const router = express.Router();
 
-router.post("/", verifyToken, async (req, res) => {
+const verifyToken = require('../middleware/verify-token');
+const SoundByte = require('../models/soundByte');
+const Track = require('../models/Track');
+
+// ----------------- Helpers -----------------
+const clean = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const computeTrackKey = ({ title = '', artist = '', soundClipUrl = '' }) =>
+  `${clean(artist)}::${clean(title)}::${clean(soundClipUrl)}`;
+
+async function findOrCreateTrack(t = {}) {
+  const key = t.key || computeTrackKey(t);
+  let track = await Track.findOne({ key });
+  if (!track) track = await Track.create({ ...t, key });
+  return track;
+}
+
+// ----------------- Routes -----------------
+
+// GET /sBytes  (newest first, simple pagination)
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
+
+    const [items, total] = await Promise.all([
+      SoundByte.find({})
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('author'),
+      SoundByte.countDocuments(),
+    ]);
+
+    res.json({ total, limit, skip, items });
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// GET /sBytes/:sByteId
+router.get('/:sByteId', verifyToken, async (req, res) => {
+  try {
+    const sByte = await SoundByte.findById(req.params.sByteId).populate('author');
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
+    res.json(sByte);
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// POST /sBytes  (create; author from token; optional track denormalization)
+router.post('/', verifyToken, async (req, res) => {
   try {
     req.body.author = req.user._id;
-    const sByte = await SoundByte.create(req.body);
-    sByte._doc.author = req.user;
+
+    let denorm = {};
+    if (req.body.track && typeof req.body.track === 'object') {
+      const t = await findOrCreateTrack(req.body.track);
+      denorm = {
+        trackId: t._id,
+        title: t.title,
+        artist: t.artist,
+        genre: t.genre,
+        coverArtUrl: t.coverArtUrl,
+        soundClipUrl: t.soundClipUrl,
+      };
+    }
+
+    const sByte = await SoundByte.create({ ...req.body, ...denorm });
+    await sByte.populate('author');
     res.status(201).json(sByte);
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
 });
 
-router.get("/", verifyToken, async (req, res) => {
-    try {
-    const sBytes = await SoundByte.find({})
-      .populate("author")
-      .sort({ createdAt: "desc" });
-    res.status(200).json(sBytes);
-  } catch (err) {
-    res.status(500).json({ err: err.message });
-  }
-});
-
-router.get("/:sByteId", verifyToken, async (req, res) => {
+// PUT /sBytes/:sByteId  (update; only owner; optional re-link to track)
+router.put('/:sByteId', verifyToken, async (req, res) => {
   try {
-    const sByte = await SoundByte.findById(req.params.sByteId).populate("author");
-    res.status(200).json(sByte);
-  } catch (err) {
-    res.status(500).json({ err: err.message });
-  }
-});
-
-router.put("/:sByteId", verifyToken, async (req, res) => {
-  try {
-    // Find the sByte:
     const sByte = await SoundByte.findById(req.params.sByteId);
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
 
-    // Check permissions:
-    if (!sByte.author.equals(req.user._id)) {
+    if (String(sByte.author) !== String(req.user._id)) {
       return res.status(403).send("You're not allowed to do that!");
     }
 
-    // Update sByte:
-    const updatedSoundByte = await SoundByte.findByIdAndUpdate(
-      req.params.sByteId,
-      req.body,
-      { new: true }
-    );
+    let update = { ...req.body };
 
-    // Append req.user to the author property:
-    updatedSoundByte._doc.author = req.user;
+    if (req.body.track && typeof req.body.track === 'object') {
+      const t = await findOrCreateTrack(req.body.track);
+      Object.assign(update, {
+        trackId: t._id,
+        title: t.title,
+        artist: t.artist,
+        genre: t.genre,
+        coverArtUrl: t.coverArtUrl,
+        soundClipUrl: t.soundClipUrl,
+      });
+    }
 
-    // Issue JSON response:
-    res.status(200).json(updatedSoundByte);
+    const updated = await SoundByte.findByIdAndUpdate(req.params.sByteId, update, {
+      new: true,
+    }).populate('author');
+
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
 });
 
-router.delete("/:sByteId", verifyToken, async (req, res) => {
+// DELETE /sBytes/:sByteId  (only owner)
+router.delete('/:sByteId', verifyToken, async (req, res) => {
   try {
     const sByte = await SoundByte.findById(req.params.sByteId);
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
 
-    if (!sByte.author.equals(req.user._id)) {
+    if (String(sByte.author) !== String(req.user._id)) {
       return res.status(403).send("You're not allowed to do that!");
     }
 
-    const deletedSoundByte = await SoundByte.findByIdAndDelete(req.params.sByteId);
-    res.status(200).json(deletedSoundByte);
+    await sByte.deleteOne();
+    res.json({ ok: true, deletedId: sByte._id });
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
 });
 
-router.post("/:sByteId/comments", verifyToken, async (req, res) => {
+// POST /sBytes/:sByteId/like  (count-only MVP)
+router.post('/:sByteId/like', verifyToken, async (req, res) => {
   try {
-    req.body.author = req.user._id;
+    const s = await SoundByte.findById(req.params.sByteId);
+    if (!s) return res.status(404).json({ err: 'SoundByte not found' });
+
+    s.likesCount = (s.likesCount || 0) + 1;
+    await s.save();
+    res.json({ _id: s._id, likesCount: s.likesCount });
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// POST /sBytes/:sByteId/unlike  (clamped at 0)
+router.post('/:sByteId/unlike', verifyToken, async (req, res) => {
+  try {
+    const s = await SoundByte.findById(req.params.sByteId);
+    if (!s) return res.status(404).json({ err: 'SoundByte not found' });
+
+    s.likesCount = Math.max((s.likesCount || 0) - 1, 0);
+    await s.save();
+    res.json({ _id: s._id, likesCount: s.likesCount });
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// ----- Comments (simple subdoc CRUD) -----
+
+// POST /sBytes/:sByteId/comments
+router.post('/:sByteId/comments', verifyToken, async (req, res) => {
+  try {
     const sByte = await SoundByte.findById(req.params.sByteId);
-    sByte.comments.push(req.body);
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
+
+    const comment = {
+      author: req.user._id,
+      text: req.body.text || '',
+    };
+    sByte.comments.push(comment);
     await sByte.save();
-
-    // Find the newly created comment:
-    const newComment = sByte.comments[sByte.comments.length - 1];
-
-    newComment._doc.author = req.user;
-
-    // Respond with the newComment:
-    res.status(201).json(newComment);
+    await sByte.populate('author');
+    res.status(201).json(sByte);
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
 });
 
-router.put("/:sByteId/comments/:commentId", verifyToken, async (req, res) => {
+// PUT /sBytes/:sByteId/comments/:commentId
+router.put('/:sByteId/comments/:commentId', verifyToken, async (req, res) => {
   try {
     const sByte = await SoundByte.findById(req.params.sByteId);
-    const comment = sByte.comments.id(req.params.commentId);
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
 
-    // ensures the current user is the author of the comment
-    if (comment.author.toString() !== req.user._id) {
-      return res
-        .status(403)
-        .json({ message: "You are not authorized to edit this comment" });
+    const sub = sByte.comments.id(req.params.commentId);
+    if (!sub) return res.status(404).json({ err: 'Comment not found' });
+
+    if (String(sub.author) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You are not authorized to edit this comment' });
     }
 
-    comment.text = req.body.text;
+    sub.text = req.body.text ?? sub.text;
     await sByte.save();
-    res.status(200).json({ message: "Comment updated successfully" });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
 });
 
-router.delete("/:sByteId/comments/:commentId", verifyToken, async (req, res) => {
+// DELETE /sBytes/:sByteId/comments/:commentId
+router.delete('/:sByteId/comments/:commentId', verifyToken, async (req, res) => {
   try {
     const sByte = await SoundByte.findById(req.params.sByteId);
-    const comment = sByte.comments.id(req.params.commentId);
+    if (!sByte) return res.status(404).json({ err: 'SoundByte not found' });
 
-    // ensures the current user is the author of the comment
-    if (comment.author.toString() !== req.user._id) {
-      return res
-        .status(403)
-        .json({ message: "You are not authorized to edit this comment" });
+    const sub = sByte.comments.id(req.params.commentId);
+    if (!sub) return res.status(404).json({ err: 'Comment not found' });
+
+    if (String(sub.author) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You are not authorized to delete this comment' });
     }
 
-    sByte.comments.remove({ _id: req.params.commentId });
+    sub.deleteOne();
     await sByte.save();
-    res.status(200).json({ message: "Comment deleted successfully" });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ err: err.message });
   }
