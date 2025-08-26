@@ -1,16 +1,18 @@
 // controllers/tracks.controller.js
-const mongoose = require('mongoose');
-const Track = require('../models/Track'); // match file name
-const isId = (id) => mongoose.Types.ObjectId.isValid(id);
+const express = require('express');
+const router = express.Router();
 
-// Optional enrichment (safe if the file is missing)
+const verifyToken = require('../middleware/verify-token'); // use on write ops
+const Track = require('../models/Track'); // match your file name (capital T)
+
+// ---- Optional enrichment (safe if file not present) ----
 let enrichTrack = async () => ({});
 const ENRICH = String(process.env.ENABLE_ENRICHMENT).toLowerCase() === 'true';
 try {
   ({ enrichTrack } = require('../services/music.service'));
 } catch (_) { /* no-op */ }
 
-// Local fallback key generator if model lacks keyOf
+// ---- Helpers ----
 const clean = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const keyOf = (artist, title, soundClipUrl = '') =>
   `${clean(artist)}::${clean(title)}::${clean(soundClipUrl)}`;
@@ -21,10 +23,43 @@ const buildFilter = (q) => {
   return { $or: [{ title: rx }, { artist: rx }] };
 };
 
-async function create(req, res, next) {
+// -------------------- Routes --------------------
+
+// GET /tracks  (public)
+router.get('/', async (req, res) => {
+  try {
+    const { q, page = '1', limit = '10' } = req.query;
+    const p = Math.max(parseInt(page, 10) || 1, 1);
+    const l = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+
+    const filter = buildFilter(q);
+    const [items, total] = await Promise.all([
+      Track.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l),
+      Track.countDocuments(filter),
+    ]);
+
+    res.json({ items, page: p, limit: l, total, hasNext: p * l < total });
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// GET /tracks/:id  (public)
+router.get('/:id', async (req, res) => {
+  try {
+    const doc = await Track.findById(req.params.id);
+    if (!doc) return res.status(404).json({ err: 'Track not found' });
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
+
+// POST /tracks  (protected)
+router.post('/', verifyToken, async (req, res) => {
   try {
     const { title, artist, coverArtUrl, soundClipUrl, sourceUrl, genre } = req.body || {};
-    if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
+    if (!title || !artist) return res.status(400).json({ err: 'title and artist are required' });
 
     const key = (Track.keyOf?.(artist, title, soundClipUrl) ?? keyOf(artist, title, soundClipUrl));
     let track = await Track.findOne({ key });
@@ -46,61 +81,40 @@ async function create(req, res, next) {
     }
 
     res.status(201).json(track);
-  } catch (e) { next(e); }
-}
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ err: 'duplicate track' });
+    res.status(500).json({ err: err.message });
+  }
+});
 
-async function index(req, res, next) {
+// PUT /tracks/:id  (protected)
+router.put('/:id', verifyToken, async (req, res) => {
   try {
-    const { q, page = '1', limit = '10' } = req.query;
-    const p = Math.max(parseInt(page, 10) || 1, 1);
-    const l = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
-
-    const filter = buildFilter(q);
-    const [items, total] = await Promise.all([
-      Track.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l),
-      Track.countDocuments(filter),
-    ]);
-
-    res.json({ items, page: p, limit: l, total, hasNext: p * l < total });
-  } catch (e) { next(e); }
-}
-
-async function show(req, res, next) {
-  try {
-    const { id } = req.params;
-    if (!isId(id)) return res.status(400).json({ error: 'invalid id' });
-    const track = await Track.findById(id);
-    if (!track) return res.status(404).json({ error: 'not found' });
-    res.json(track);
-  } catch (e) { next(e); }
-}
-
-async function update(req, res, next) {
-  try {
-    const { id } = req.params;
-    if (!isId(id)) return res.status(400).json({ error: 'invalid id' });
-
     const allowed = ['title','artist','coverArtUrl','soundClipUrl','sourceUrl','genre'];
     const updates = {};
     for (const k of allowed) if (k in (req.body || {})) updates[k] = req.body[k];
 
-    const track = await Track.findByIdAndUpdate(id, updates, { new: true, runValidators: true });
-    if (!track) return res.status(404).json({ error: 'not found' });
-    res.json(track);
-  } catch (e) {
-    if (e?.code === 11000) return res.status(409).json({ error: 'duplicate track (artist — title)' });
-    next(e);
+    const doc = await Track.findByIdAndUpdate(req.params.id, updates, {
+      new: true,
+      runValidators: true,
+    });
+    if (!doc) return res.status(404).json({ err: 'Track not found' });
+    res.json(doc);
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ err: 'duplicate track' });
+    res.status(500).json({ err: err.message });
   }
-}
+});
 
-async function destroy(req, res, next) {
+// DELETE /tracks/:id  (protected)
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!isId(id)) return res.status(400).json({ error: 'invalid id' });
-    const deleted = await Track.findByIdAndDelete(id);
-    if (!deleted) return res.status(404).json({ error: 'not found' });
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-}
+    const deleted = await Track.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ err: 'Track not found' });
+    res.json({ ok: true, deletedId: deleted._id });
+  } catch (err) {
+    res.status(500).json({ err: err.message });
+  }
+});
 
-module.exports = { create, index, show, update, destroy };
+module.exports = router;
