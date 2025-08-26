@@ -9,19 +9,18 @@ const User = require('../models/user');
 const saltRounds = 12;
 
 router.post('/sign-up', async (req, res) => {
-  console.log(req.body)
   try {
-    const userInDatabase = await User.findOne({ username: req.body.username });
-
-    if (userInDatabase) {
-        return res.status(409).json({ err: 'Username already taken.' });
+    const { username, email, password } = req.body;
+    if (!username || !email || !password) {
+      return res.status(400).json({ err: 'username, email, and password are required' });
     }
-
+    const taken = await User.findOne({ $or: [{ username }, { email }] });
+    if (taken) return res.status(409).json({ err: 'Username or email already taken.' });
     const user = await User.create({
-        username: req.body.username,
-        hashedPassword: bcrypt.hashSync(req.body.password, saltRounds)
+      username,
+      email,
+      hashedPassword: bcrypt.hashSync(password, saltRounds)
     });
-
     const payload = { username: user.username, _id: user._id }
 
     const token = jwt.sign({ payload }, process.env.JWT_SECRET);
