@@ -9,7 +9,7 @@ const testJwtRouter = require('./controllers/test-jwt');
 const authRouter = require('./controllers/auth');
 const usersRouter = require('./controllers/users.js');
 const soundBytesRouter = require("./controllers/soundBytes.js");
-const tracksRouter = require('./controllers/tracks.controller');
+const tracksRouter = require('./controllers/tracks.js');
 const verifyToken = require('./middleware/verify-token');
 
 mongoose.connect(process.env.MONGODB_URI);

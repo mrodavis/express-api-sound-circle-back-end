@@ -1,4 +1,4 @@
-// controllers/tracks.controller.js
+// controllers/tracks.js
 const express = require('express');
 const router = express.Router();
 
